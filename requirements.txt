@@ -13,3 +13,4 @@ tensorboard==2.9.0
 tensorboardX==1.8
 torch==1.9.0
 tqdm==4.62.3
+entmax
