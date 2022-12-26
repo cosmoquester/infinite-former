@@ -1,3 +1,4 @@
 env/
 *.pyc
 data/
+__pycache__/
