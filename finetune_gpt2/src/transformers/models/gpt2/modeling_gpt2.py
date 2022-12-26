@@ -83,13 +83,13 @@ def load_tf_weights_in_gpt2(model, config, gpt2_checkpoint_path):
         )
         raise
     tf_path = os.path.abspath(gpt2_checkpoint_path)
-    logger.info("Converting TensorFlow checkpoint from {}".format(tf_path))
+    logger.info(f"Converting TensorFlow checkpoint from {tf_path}")
     # Load weights from TF model
     init_vars = tf.train.list_variables(tf_path)
     names = []
     arrays = []
     for name, shape in init_vars:
-        logger.info("Loading TF weight {} with shape {}".format(name, shape))
+        logger.info(f"Loading TF weight {name} with shape {shape}")
         array = tf.train.load_variable(tf_path, name)
         names.append(name)
         arrays.append(array.squeeze())
@@ -122,7 +122,7 @@ def load_tf_weights_in_gpt2(model, config, gpt2_checkpoint_path):
         except AssertionError as e:
             e.args += (pointer.shape, array.shape)
             raise
-        logger.info("Initialize PyTorch weight {}".format(name))
+        logger.info(f"Initialize PyTorch weight {name}")
         pointer.data = torch.from_numpy(array)
     return model
 
@@ -198,7 +198,6 @@ class Attention(nn.Module):
         self.pruned_heads = self.pruned_heads.union(heads)
 
     def _attn(self, q, k, v, attention_mask=None, head_mask=None, output_attentions=False):
-        
         w = torch.matmul(q, k)
         if self.scale:
             w = w / (float(v.size(-1)) ** 0.5)
@@ -264,7 +263,6 @@ class Attention(nn.Module):
         query = self.split_heads(query)
         key = self.split_heads(key, k=True)
         value = self.split_heads(value)
-
         if layer_past is not None:
             past_key, past_value = layer_past[0].transpose(-2, -1), layer_past[1]  # transpose back cf below
             key = torch.cat((past_key, key), dim=-1)
@@ -276,12 +274,10 @@ class Attention(nn.Module):
             present = None
 
         attn_outputs = self._attn(query, key, value, attention_mask, head_mask, output_attentions)
-        
         a = attn_outputs[0]
 
         a = self.merge_heads(a)
         a = self.c_proj(a)
-        
 
         if self.use_long_term_attention and mem is not None:
             if self.kl_regularizer:
@@ -404,8 +400,6 @@ class Block(nn.Module):
             outputs = (hidden_states,) + outputs
         else:
             outputs = (hidden_states,) + outputs[1:]
-
-        #print('hidden states',hidden_states)
 
         if self.long_term_attention and self.kl_regularizer:
             return outputs, kl_reg
@@ -797,10 +791,8 @@ class GPT2Model(GPT2PreTrainedModel):
         all_cross_attentions = () if output_attentions and self.config.add_cross_attention else None
         all_hidden_states = () if output_hidden_states else None
         kl_regs=None
-        c_losses=None
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
-            #print('\n')
-            #print('layer', i)
+
             # Model parallel
             if self.model_parallel:
                 torch.cuda.set_device(hidden_states.device)
@@ -831,7 +823,6 @@ class GPT2Model(GPT2PreTrainedModel):
 
                     return custom_forward
 
-                
                 outputs = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(block),
                     hidden_states,
@@ -938,7 +929,6 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         self.long_term_attention = config.long_term_attention
         if self.long_term_attention:
             self.kl_regularizer= config.kl_regularizer
-        
 
     @add_start_docstrings(PARALLELIZE_DOCSTRING)
     def parallelize(self, device_map=None):
@@ -1105,7 +1095,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
     def _reorder_cache(past: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor) -> Tuple[Tuple[torch.Tensor]]:
         """
         This function is used to re-order the :obj:`past_key_values` cache if
-        :meth:`~transformers.PretrainedModel.beam_search` or :meth:`~transformers.PretrainedModel.beam_sample` is
+        :meth:`~transformers.PreTrainedModel.beam_search` or :meth:`~transformers.PreTrainedModel.beam_sample` is
         called. This is required to match :obj:`past_key_values` with the correct beam_idx at every generation step.
         """
         return tuple(
@@ -1311,7 +1301,7 @@ class GPT2DoubleHeadsModel(GPT2PreTrainedModel):
     def _reorder_cache(past: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor) -> Tuple[Tuple[torch.Tensor]]:
         """
         This function is used to re-order the :obj:`past_key_values` cache if
-        :meth:`~transformers.PretrainedModel.beam_search` or :meth:`~transformers.PretrainedModel.beam_sample` is
+        :meth:`~transformers.PreTrainedModel.beam_search` or :meth:`~transformers.PreTrainedModel.beam_sample` is
         called. This is required to match :obj:`past_key_values` with the correct beam_idx at every generation step.
         """
         return tuple(
