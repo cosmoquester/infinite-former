@@ -5,18 +5,19 @@ torch.autograd.set_detect_anomaly(True)
 
 
 class ContinuousSparsemaxFunction(torch.autograd.Function):
-
     @classmethod
     def _integrate_phi_times_psi(cls, ctx, a, b):
         """Compute integral int_a^b phi(t) * psi(t).T."""
         num_basis = [len(basis_functions) for basis_functions in ctx.psi]
         total_basis = sum(num_basis)
-        V = torch.zeros((a.shape[0], 2, total_basis), dtype=ctx.dtype, device=ctx.device)
+        V = torch.zeros(
+            (a.shape[0], 2, total_basis), dtype=ctx.dtype, device=ctx.device
+        )
         offsets = torch.cumsum(torch.IntTensor(num_basis).to(ctx.device), dim=0)
         start = 0
         for j, basis_functions in enumerate(ctx.psi):
-            V[:, 0, start:offsets[j]] = basis_functions.integrate_t_times_psi(a, b)
-            V[:, 1, start:offsets[j]] = basis_functions.integrate_t2_times_psi(a, b)
+            V[:, 0, start : offsets[j]] = basis_functions.integrate_t_times_psi(a, b)
+            V[:, 1, start : offsets[j]] = basis_functions.integrate_t2_times_psi(a, b)
             start = offsets[j]
         return V
 
@@ -29,7 +30,7 @@ class ContinuousSparsemaxFunction(torch.autograd.Function):
         offsets = torch.cumsum(torch.IntTensor(num_basis).to(ctx.device), dim=0)
         start = 0
         for j, basis_functions in enumerate(ctx.psi):
-            v[:, start:offsets[j]] = basis_functions.integrate_psi(a, b)
+            v[:, start : offsets[j]] = basis_functions.integrate_psi(a, b)
             start = offsets[j]
         return v
 
@@ -52,11 +53,11 @@ class ContinuousSparsemaxFunction(torch.autograd.Function):
         ctx.dtype = theta.dtype
         ctx.device = theta.device
         ctx.psi = psi
-        sigma = torch.sqrt(-.5 / theta[:, 1])
-        mu = theta[:, 0] * sigma ** 2
-        A = -.5 * (3. / (2 * sigma)) ** (2. / 3)
+        sigma = torch.sqrt(-0.5 / theta[:, 1])
+        mu = theta[:, 0] * sigma**2
+        A = -0.5 * (3.0 / (2 * sigma)) ** (2.0 / 3)
         a = torch.sqrt(-2 * A) * sigma
-        A += mu ** 2 / (2 * sigma ** 2)
+        A += mu**2 / (2 * sigma**2)
         left = (mu - a).unsqueeze(1)
         right = (mu + a).unsqueeze(1)
         V = cls._integrate_phi_times_psi(ctx, left, right)
