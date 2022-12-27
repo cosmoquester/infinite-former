@@ -158,21 +158,21 @@ class Attention(nn.Module):
             self.kl_regularizer=config.kl_regularizer
             long_term_attn_mechanism = partial(LongTermAttention,
                                             attn_num_basis=config.long_term_attention_basis,
-                                            head_size=int(config.n_embd/config.n_head),
-                                            length=512,
+                                            head_dim=int(config.n_embd/config.n_head),
+                                            memory_length=512,
                                             target_len=512,
                                             attn_func=config.long_term_attention_norm,
-                                            infinite_memory=config.infinite_memory,
+                                            use_infinite_memory=config.infinite_memory,
                                             attn_drop=config.attn_drop,
                                             n_heads=self.n_head,
-                                            affines=config.affines,
-                                            mask=config.mask,
+                                            use_affines=config.affines,
+                                            use_mask=config.mask,
                                             mask_type=config.mask_type,
                                             mask_dropout=config.mask_dropout,
-                                            kl_regularizer=self.kl_regularizer,
+                                            use_kl_regularizer=self.kl_regularizer,
                                             sigma_0=config.sigma_0,
                                             mu_0=config.mu_0,
-                                            sticky_memories=config.sticky_memories,
+                                            use_sticky_memories=config.sticky_memories,
                                             )
             self.long_term_attention=long_term_attn_mechanism()
             if self.kl_regularizer:
