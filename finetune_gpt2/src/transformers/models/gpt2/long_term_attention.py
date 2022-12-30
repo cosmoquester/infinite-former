@@ -102,14 +102,8 @@ class LongTermAttention(nn.Module):
         if self.mask_dropout_value>0:
             self.mask_dropout=nn.Dropout(self.mask_dropout_value)
 
-        self.mem_threshold=2048
-
         self.nb_samples=512 # number of samples used for update
         self.tau = 0.5 #compressing factor
-        self.count = 0
-
-        self.x_past=None # previous memory vectors
-        self.B_past=None # previous coefficient matrix
 
         self.ridge_penalty=0.5 # ridge penalty
         padding = True
@@ -212,8 +206,8 @@ class LongTermAttention(nn.Module):
         
         return B
 
-    def update_inf(self, x):
-        if self.B_past is not None:       
+    def update_inf(self, x, B_past):
+        if B_past is not None:       
             if self.use_sticky_memories:
 
                 n = dist.Normal(self.attn_past[0],self.attn_past[1])
@@ -240,22 +234,20 @@ class LongTermAttention(nn.Module):
                 for i in range(len(ts)):
                     samples[i] = self.psi[self.memory_length][0].batch_evaluate(ts[i])
 
-                xm_tau = self.B_past.transpose(-1,-2).matmul(samples.transpose(-1,-2)) # [B,e,nb_samples]
+                xm_tau = B_past.transpose(-1,-2).matmul(samples.transpose(-1,-2)) # [B,e,nb_samples]
             
             else:
-                xm_tau = self.B_past.transpose(-1,-2).matmul(self.samples.transpose(-1,-2)) # [B,e,nb_samples]
+                xm_tau = B_past.transpose(-1,-2).matmul(self.samples.transpose(-1,-2)) # [B,e,nb_samples]
             
             x = torch.cat([xm_tau,x], dim=2) # [B,e,nb_samples+L]
             B = self.value_function(x, inf=True) # [B,N,e]
         else:
             B = self.value_function(x)
-        
-        self.B_past=B.detach()
-        self.x_past=x
+
         return B
 
 
-    def forward(self, k, query):
+    def forward(self, k, query, B_past=None):
         """
         Args:
             k: memory [BatchSize, SeqLength, HiddenDim]
@@ -264,12 +256,6 @@ class LongTermAttention(nn.Module):
         batch_size = k.size(0) #batch size
         qlen = query.size(2) #query length
         klen = k.size(1) #key length
-
-        # clean memory if going through different document
-        if self.count>=self.mem_threshold:
-            self.B_past=None 
-            self.x_past=None
-            self.count=0
 
         k = k.permute(0,2,1) # [B,e,L]
         if self.mask_dropout_value>0:
@@ -281,10 +267,11 @@ class LongTermAttention(nn.Module):
 
         # perform memory update
         if self.use_infinite_memory:
-            B = self.update_inf(k)
-            self.count+=klen
+            B = self.update_inf(k, B_past)
+            new_B_past = B.detach()
         else: # compute input continuous approximation
             B = self.value_function(k) # [B,N,e]
+            new_B_past = None
 
         keys = self.proj_key(B)
         values = self.proj_value(B)
@@ -320,7 +307,8 @@ class LongTermAttention(nn.Module):
                 kl_reg = 1/2 * ( sigma_sq.view(batch_size,-1) / sigma_0_sq - 
                             torch.log(sigma_sq.view(batch_size,-1)/sigma_0_sq) -1 +
                             (mu.view(batch_size,-1) - self.mu_0)**2 / sigma_0_sq )
-
+        else:
+            kl_reg = None
 
         # pass parameters to theta
         theta = torch.zeros(batch_size*self.n_heads*qlen, 2, device=self.device)  # [B*h*q, 2]
@@ -344,10 +332,7 @@ class LongTermAttention(nn.Module):
 
         context = self.attn_out(context)
 
-        if self.use_kl_regularizer:
-            return context, kl_reg
-        else:
-            return context
+        return context, new_B_past, kl_reg
 
     def __repr__(self):
         return "ContinuousAttention"

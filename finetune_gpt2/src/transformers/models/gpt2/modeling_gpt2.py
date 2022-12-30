@@ -246,10 +246,9 @@ class Attention(nn.Module):
         encoder_attention_mask=None,
         use_cache=False,
         output_attentions=False,
-        mem=None
+        mem=None,
+        B_past=None,
     ):
-        
-       
         if encoder_hidden_states is not None:
             assert hasattr(
                 self, "q_attn"
@@ -280,21 +279,14 @@ class Attention(nn.Module):
         a = self.c_proj(a)
 
         if self.use_long_term_attention and mem is not None:
-            if self.kl_regularizer:
-                a_long_term, kl_reg = self.long_term_attention(mem, query)
-            else:
-                a_long_term = self.long_term_attention(mem, query)
-
-        if self.use_long_term_attention and mem is not None:
+            a_long_term, new_B_past, kl_reg = self.long_term_attention(mem, query, B_past)
             a+=a_long_term
 
         a = self.resid_dropout(a)
 
         if self.use_long_term_attention and mem is not None and self.kl_regularizer:
-            return (a, present) + attn_outputs[1:], kl_reg  # a, present, (attentions)
-        elif self.use_long_term_attention and self.kl_regularizer:
-            return (a, present) + attn_outputs[1:], None  # a, present, (attentions)
-        
+            return (a, present) + attn_outputs[1:] + (new_B_past, kl_reg)  # a, present, (attentions)
+
         return (a, present) + attn_outputs[1:]  # a, present, (attentions)
 
 
@@ -330,8 +322,6 @@ class Block(nn.Module):
         if self.long_term_attention:
             self.kl_regularizer=config.kl_regularizer
 
-        self.mem=None
-
     def forward(
         self,
         hidden_states,
@@ -342,19 +332,23 @@ class Block(nn.Module):
         encoder_attention_mask=None,
         use_cache=False,
         output_attentions=False,
+        mem=None,
+        B_past=None,
     ):
 
 
-        if self.long_term_attention and self.kl_regularizer:
-            attn_outputs, kl_reg = self.attn(
+        if self.long_term_attention:
+            *attn_outputs, new_B_past, kl_reg = self.attn(
                 self.ln_1(hidden_states),
                 layer_past=layer_past,
                 attention_mask=attention_mask,
                 head_mask=head_mask,
                 use_cache=use_cache,
                 output_attentions=output_attentions,
-                mem=self.mem
+                mem=mem,
+                B_past=B_past,
             )
+            new_mem = hidden_states.detach()
         else:
             attn_outputs = self.attn(
                 self.ln_1(hidden_states),
@@ -363,11 +357,8 @@ class Block(nn.Module):
                 head_mask=head_mask,
                 use_cache=use_cache,
                 output_attentions=output_attentions,
-                mem=self.mem
+                mem=mem
             )
-
-        if self.long_term_attention:
-            self.mem = hidden_states.detach()
 
         attn_output = attn_outputs[0]  # output_attn: a, present, (attentions)
         outputs = attn_outputs[1:]
@@ -401,8 +392,8 @@ class Block(nn.Module):
         else:
             outputs = (hidden_states,) + outputs[1:]
 
-        if self.long_term_attention and self.kl_regularizer:
-            return outputs, kl_reg
+        if self.long_term_attention:
+            return outputs + (new_mem, new_B_past, kl_reg)
 
         return outputs  # hidden_states, present, (attentions, cross_attentions)
 
@@ -702,6 +693,8 @@ class GPT2Model(GPT2PreTrainedModel):
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
+        mems=None,
+        B_pasts=None,
     ):
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -791,6 +784,8 @@ class GPT2Model(GPT2PreTrainedModel):
         all_cross_attentions = () if output_attentions and self.config.add_cross_attention else None
         all_hidden_states = () if output_hidden_states else None
         kl_regs=None
+        new_mems=[]
+        new_B_pasts = []
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
 
             # Model parallel
@@ -833,8 +828,8 @@ class GPT2Model(GPT2PreTrainedModel):
                     encoder_attention_mask,
                 )
             else:
-                if self.long_term_attention and self.kl_regularizer:
-                    outputs, kl_reg = block(
+                if self.long_term_attention:
+                    *outputs, new_mem, new_B_past, kl_reg = block(
                         hidden_states,
                         layer_past=layer_past,
                         attention_mask=attention_mask,
@@ -843,7 +838,11 @@ class GPT2Model(GPT2PreTrainedModel):
                         encoder_attention_mask=encoder_attention_mask,
                         use_cache=use_cache,
                         output_attentions=output_attentions,
+                        mem=mems[i],
+                        new_B_past=B_pasts[i],
                     )
+                    new_mems.append(new_mem)
+                    new_B_pasts.append(new_B_past)
                 else:
                     outputs = block(
                         hidden_states,
@@ -894,7 +893,7 @@ class GPT2Model(GPT2PreTrainedModel):
                 hidden_states=all_hidden_states,
                 attentions=all_self_attentions,
                 cross_attentions=all_cross_attentions,
-                ), kl_regs   
+                ), (new_mems, new_B_pasts, kl_regs)
 
         return BaseModelOutputWithPastAndCrossAttentions(
             last_hidden_state=hidden_states,
@@ -1016,8 +1015,8 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if self.long_term_attention and self.kl_regularizer:
-            transformer_outputs, kl_regs = self.transformer(
+        if self.long_term_attention:
+            transformer_outputs, (new_mems, new_B_pasts, kl_regs) = self.transformer(
                 input_ids,
                 past_key_values=past_key_values,
                 attention_mask=attention_mask,
@@ -1079,7 +1078,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
                 hidden_states=transformer_outputs.hidden_states,
                 attentions=transformer_outputs.attentions,
                 cross_attentions=transformer_outputs.cross_attentions,
-                ), kl_regs
+                ), (new_mems, new_B_pasts, kl_regs)
 
         
         return CausalLMOutputWithCrossAttentions(
