@@ -91,24 +91,24 @@ class LongTermAttention(nn.Module):
             self.sigma = nn.Linear(attn_num_basis, 1, bias=False)
             self.softplus = torch.nn.Softplus()
 
-        # normalizing function
-        if attn_func == 'softmax':
-            self.transform = ContinuousSoftmax(psi=None)
-        elif attn_func == 'sparsemax':
-            self.transform = ContinuousSparsemax(psi=None)
-        else:
-            raise ValueError(f"'attn_func' cannot be `{attn_func}`")
-
         # get basis functions psi
         sigmas = [0.005, 0.01] # basis function sigmas
         if attn_num_basis % len(sigmas):
             attn_num_basis += (len(sigmas) - attn_num_basis % len(sigmas))
 
         # get positions for memory vectors
-        basis_mu, basis_sigma = LongTermAttention.add_gaussian_basis_functions(attn_num_basis, sigmas)
+        basis_mu, basis_sigma = LongTermAttention.get_gaussian_basis_functions(attn_num_basis, sigmas)
         self.psi = GaussianBasisFunctionsModule(mu=basis_mu, sigma=basis_sigma)
         self.register_buffer("basis_mu", basis_mu)
         self.register_buffer("basis_sigma", basis_sigma)
+
+        # normalizing function
+        if attn_func == 'softmax':
+            self.transform = ContinuousSoftmax(psi=[self.psi])
+        elif attn_func == 'sparsemax':
+            self.transform = ContinuousSparsemax(psi=[self.psi])
+        else:
+            raise ValueError(f"'attn_func' cannot be `{attn_func}`")
 
         if padding:
             if memory_length % 2:
@@ -122,7 +122,7 @@ class LongTermAttention(nn.Module):
             positions = torch.linspace(shift, 1-shift, memory_length)
 
         # compute basis functions
-        Gs = LongTermAttention.compute_G(self.attn_num_basis, self.ridge_penalty, memory_length, self.psi, positions, padding=padding) # [L,N]
+        Gs = self.compute_G(memory_length, self.psi, positions, padding=padding) # [L,N]
         self.register_buffer("Gs", Gs)
         self.positions = positions[int(memory_length/2):-int(memory_length/2)]
 
@@ -153,7 +153,7 @@ class LongTermAttention(nn.Module):
                     self.samples = torch.cat([self.samples,self.psi.evaluate(t/self.tau)], dim=0)
 
             # compute G for the infinite case
-            G_inf = LongTermAttention.compute_G(self.attn_num_basis, self.ridge_penalty, self.nb_samples+memory_length, self.psi, positions_inf, padding=padding) #[L+nb_samples,N]
+            G_inf = self.compute_G(self.nb_samples+memory_length, self.psi, positions_inf, padding=padding) #[L+nb_samples,N]
             self.register_buffer("G_inf", G_inf)
 
             if self.use_sticky_memories:
@@ -162,21 +162,20 @@ class LongTermAttention(nn.Module):
                 self.bins_cat = dist.Categorical(torch.ones(self.nb_bins_cat))
 
     @staticmethod
-    def add_gaussian_basis_functions(nb_basis: int, sigmas) -> torch.Tensor:
+    def get_gaussian_basis_functions(nb_basis: int, sigmas) -> torch.Tensor:
         mu, sigma = torch.meshgrid(torch.linspace(0, 1, nb_basis // len(sigmas)), torch.Tensor(sigmas))
         mu = mu.flatten()
         sigma = sigma.flatten()
         assert mu.size(0) == nb_basis
         return mu, sigma
 
-    @staticmethod
-    def compute_G(attn_num_basis: int, ridge_penalty: float, l: int, psi: GaussianBasisFunctionsModule, positions: torch.Tensor, padding=True) -> torch.Tensor:
-        F = torch.zeros(attn_num_basis, positions.size(0))
+    def compute_G(self, l: int, psi: GaussianBasisFunctionsModule, positions: torch.Tensor, padding=True) -> torch.Tensor:
+        F = torch.zeros(self.attn_num_basis, positions.size(0))
 
         F[:, :] = psi.evaluate(positions.unsqueeze(1)).t()
 
-        I = torch.eye(attn_num_basis)
-        G = F.t().matmul((F.matmul(F.t()) + ridge_penalty * I).inverse())
+        I = torch.eye(self.attn_num_basis)
+        G = F.t().matmul((F.matmul(F.t()) + self.ridge_penalty * I).inverse())
 
         if padding:
             if l % 2:
@@ -309,9 +308,6 @@ class LongTermAttention(nn.Module):
         theta = torch.zeros(batch_size*self.n_heads*qlen, 2, device=k.device)  # [B*h*q, 2]
         theta[:, 0] = mu / sigma_sq
         theta[:, 1] = -1. / (2. * sigma_sq)
-
-        # get basis functions
-        self.transform.psi = [self.psi]
 
         #compute basis functions expectation
         r = self.transform(theta) # [B*h*q,N] 
