@@ -138,8 +138,10 @@ class LongTermAttention(nn.Module):
             lengths.append(memory_length)
         for l in lengths:
             # get positions for memory vectors
-            self.basis_mu, self.basis_sigma = add_gaussian_basis_functions(attn_num_basis, sigmas)
-            self.psi[l].append(GaussianBasisFunctions(mu=self.basis_mu, sigma=self.basis_sigma))
+            basis_mu, basis_sigma = add_gaussian_basis_functions(attn_num_basis, sigmas)
+            self.psi[l].append(GaussianBasisFunctions(mu=basis_mu, sigma=basis_sigma))
+            self.register_buffer("basis_mu", basis_mu)
+            self.register_buffer("basis_sigma", basis_sigma)
 
             if padding:
                 if l % 2:
