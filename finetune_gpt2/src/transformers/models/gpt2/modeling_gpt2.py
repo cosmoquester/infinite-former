@@ -160,7 +160,6 @@ class Attention(nn.Module):
                                             attn_num_basis=config.long_term_attention_basis,
                                             head_dim=int(config.n_embd/config.n_head),
                                             memory_length=512,
-                                            target_len=512,
                                             attn_func=config.long_term_attention_norm,
                                             use_infinite_memory=config.infinite_memory,
                                             attn_drop=config.attn_drop,
