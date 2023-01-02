@@ -24,8 +24,7 @@ def add_gaussian_basis_functions(nb_basis: int, sigmas) -> torch.Tensor:
 def compute_G(attn_num_basis: int, ridge_penalty: float, l: int, psi: GaussianBasisFunctions, positions: torch.Tensor, padding=True) -> torch.Tensor:
     F = torch.zeros(attn_num_basis, positions.size(0))
 
-    basis_functions = psi
-    F[:, :] = basis_functions.evaluate(positions.unsqueeze(1)).t()
+    F[:, :] = psi.evaluate(positions.unsqueeze(1)).t()
 
     I = torch.eye(attn_num_basis)
     G = F.t().matmul((F.matmul(F.t()) + ridge_penalty * I).inverse())
@@ -40,16 +39,14 @@ def compute_G(attn_num_basis: int, ridge_penalty: float, l: int, psi: GaussianBa
 
 
 class LongTermAttention(nn.Module):
-    def __init__(self, head_dim: int, memory_length: int, target_len:int,  attn_func: Literal["softmax", "sparsemax"], 
+    def __init__(self, head_dim: int, memory_length: int, attn_func: Literal["softmax", "sparsemax"], 
                   attn_num_basis: int, attn_drop: float, use_infinite_memory: bool, n_heads: int, 
                   use_affines: bool, use_mask: bool, mask_type: Literal["affine", "cnn"],
                   mask_dropout: float, use_kl_regularizer: bool, sigma_0: float, mu_0: float, 
                   use_sticky_memories: bool, **kwargs):
         """
-        
         :param head_dim: hidden dimension of each head
         :param memory_length: memory length
-        :param target_len: target length
         :param attn_func: attention function softmax or sparsemax
         :param attn_num_basis: the number of long term attention basis
         :param attn_drop: attention dropout
@@ -126,37 +123,26 @@ class LongTermAttention(nn.Module):
         if attn_num_basis % len(sigmas):
             attn_num_basis += (len(sigmas) - attn_num_basis % len(sigmas))
 
-        self.psi=[None]
-        self.Gs=[None] * (memory_length+1)
-        self.psi=[None]
-        lengths=[]
-        for i in range(memory_length):
-            self.psi.append([])
-            if (i + 1) % target_len == 0:
-                lengths.append(i + 1)
-        if memory_length not in lengths:
-            lengths.append(memory_length)
-        for l in lengths:
-            # get positions for memory vectors
-            basis_mu, basis_sigma = add_gaussian_basis_functions(attn_num_basis, sigmas)
-            self.psi[l].append(GaussianBasisFunctions(mu=basis_mu, sigma=basis_sigma))
-            self.register_buffer("basis_mu", basis_mu)
-            self.register_buffer("basis_sigma", basis_sigma)
+        # get positions for memory vectors
+        basis_mu, basis_sigma = add_gaussian_basis_functions(attn_num_basis, sigmas)
+        self.psi = GaussianBasisFunctions(mu=basis_mu, sigma=basis_sigma)
+        self.register_buffer("basis_mu", basis_mu)
+        self.register_buffer("basis_sigma", basis_sigma)
 
-            if padding:
-                if l % 2:
-                    shift = 1 / float(l)
-                    positions = torch.linspace(-.5+shift, 1.5-shift, 2*l-1).to(self.device)
-                else:
-                    shift = 1 / float(2*l)
-                    positions = torch.linspace(-.5+shift, 1.5-shift, 2*l).to(self.device)
+        if padding:
+            if memory_length % 2:
+                shift = 1 / float(memory_length)
+                positions = torch.linspace(-.5+shift, 1.5-shift, 2*memory_length-1)
             else:
-                shift = 1 / float(2*l)
-                positions = torch.linspace(shift, 1-shift, l).to(self.device)
+                shift = 1 / float(2*memory_length)
+                positions = torch.linspace(-.5+shift, 1.5-shift, 2*memory_length)
+        else:
+            shift = 1 / float(2*memory_length)
+            positions = torch.linspace(shift, 1-shift, memory_length)
 
-            # compute basis functions
-            self.Gs[l] = compute_G(self.attn_num_basis, self.ridge_penalty, l, self.psi[l][0], positions, padding=padding).to(self.device) # [L,N]
-            self.positions = positions[int(l/2):-int(l/2)]
+        # compute basis functions
+        self.Gs = compute_G(self.attn_num_basis, self.ridge_penalty, memory_length, self.psi[0], positions, padding=padding) # [L,N]
+        self.positions = positions[int(memory_length/2):-int(memory_length/2)]
 
         # compute samples for memory update
         if self.use_infinite_memory:
@@ -164,31 +150,31 @@ class LongTermAttention(nn.Module):
             tm_l = torch.arange(self.nb_samples+1,memory_length+self.nb_samples+1).float()
             tm_tau = tm_tau*self.tau/self.nb_samples # positions of old vectors
             tm_l = self.tau + (1-self.tau)*(tm_l-self.nb_samples)/memory_length # positions of new vectors
-            positions_inf = torch.cat([tm_tau, tm_l],0).to(self.device) # positions
+            positions_inf = torch.cat([tm_tau, tm_l],0) # positions
 
             if padding:
-                if l % 2:
+                if memory_length % 2:
                     shift = 1 / float(memory_length+self.nb_samples)
-                    positions_pad_ = torch.linspace(-.5+shift, 0, 2*(memory_length+self.nb_samples)-1).to(self.device)
+                    positions_pad_ = torch.linspace(-.5+shift, 0, 2*(memory_length+self.nb_samples)-1)
                 else:
                     shift = 1 / float(2*memory_length+self.nb_samples)
-                    positions_pad = torch.linspace(-.5+shift, 1.5-shift, 2*(memory_length+self.nb_samples)).to(self.device)
-                positions_pad_ = torch.FloatTensor([i for i in positions_pad if i<0]).to(self.device)
-                positions_pad__ = torch.FloatTensor([i for i in positions_pad if i>1]).to(self.device)
+                    positions_pad = torch.linspace(-.5+shift, 1.5-shift, 2*(memory_length+self.nb_samples))
+                positions_pad_ = torch.FloatTensor([i for i in positions_pad if i<0])
+                positions_pad__ = torch.FloatTensor([i for i in positions_pad if i>1])
                 positions_inf = torch.cat([positions_pad_,positions_inf,positions_pad__], dim=0)
 
             self.samples=None
             for t in tm_tau:
                 if self.samples is None:
-                    self.samples = self.psi[l][0].evaluate(t/self.tau)
+                    self.samples = self.psi[0].evaluate(t/self.tau)
                 else:
-                    self.samples = torch.cat([self.samples,self.psi[l][0].evaluate(t/self.tau)], dim=0)
+                    self.samples = torch.cat([self.samples,self.psi[0].evaluate(t/self.tau)], dim=0)
 
             # compute G for the infinite case
-            self.G_inf = compute_G(self.attn_num_basis, self.ridge_penalty, self.nb_samples+memory_length, self.psi[l][0], positions_inf, padding=padding).to(self.device) #[L+nb_samples,N]
+            self.G_inf = compute_G(self.attn_num_basis, self.ridge_penalty, self.nb_samples+memory_length, self.psi[0], positions_inf, padding=padding) #[L+nb_samples,N]
 
             if self.use_sticky_memories:
-                self.bins = torch.linspace(0,1,129).to(device=self.device) #self.positions
+                self.bins = torch.linspace(0,1,129) #self.positions
                 self.nb_bins_cat=1
                 self.bins_cat = dist.Categorical(torch.ones(self.nb_bins_cat))
 
@@ -202,7 +188,7 @@ class LongTermAttention(nn.Module):
         if inf:
             G = self.G_inf # [nb_sample+L,N]
         else:
-            G = self.Gs[x.size(-1)] # [L,N]
+            G = self.Gs # [L,N]
         B = torch.matmul(x, G) # [B,e,N]
         B = B.permute(0,2,1) # [B,N,e]
         
@@ -226,15 +212,15 @@ class LongTermAttention(nn.Module):
 
                 b = p.sample((self.nb_samples,))
                 
-                t = self.bins_cat.sample((self.nb_samples,self.attn_past[0].size(0))).to(device=self.device)
+                t = self.bins_cat.sample((self.nb_samples,self.attn_past[0].size(0)))
 
                 ts = (t*(self.bins[b+1]-self.bins[b])/self.nb_bins_cat +self.bins[b]).transpose(1,0)
 
                 ts = torch.sort(ts,-1)[0]
             
-                samples=torch.zeros(x.size(0),self.nb_samples,self.attn_num_basis).to(device=self.device)
+                samples=torch.zeros(x.size(0),self.nb_samples,self.attn_num_basis)
                 for i in range(len(ts)):
-                    samples[i] = self.psi[self.memory_length][0].batch_evaluate(ts[i])
+                    samples[i] = self.psi[0].batch_evaluate(ts[i])
 
                 xm_tau = B_past.transpose(-1,-2).matmul(samples.transpose(-1,-2)) # [B,e,nb_samples]
             
@@ -257,7 +243,6 @@ class LongTermAttention(nn.Module):
         """
         batch_size = k.size(0) #batch size
         qlen = query.size(2) #query length
-        klen = k.size(1) #key length
 
         k = k.permute(0,2,1) # [B,e,L]
         if self.mask_dropout_value>0:
@@ -313,12 +298,12 @@ class LongTermAttention(nn.Module):
             kl_reg = None
 
         # pass parameters to theta
-        theta = torch.zeros(batch_size*self.n_heads*qlen, 2, device=self.device)  # [B*h*q, 2]
+        theta = torch.zeros(batch_size*self.n_heads*qlen, 2, device=k.device)  # [B*h*q, 2]
         theta[:, 0] = mu / sigma_sq
         theta[:, 1] = -1. / (2. * sigma_sq)
 
         # get basis functions
-        self.transform.psi = self.psi[klen]
+        self.transform.psi = self.psi
 
         #compute basis functions expectation
         r = self.transform(theta) # [B*h*q,N] 
