@@ -12,31 +12,12 @@ from .continuous_sparsemax import ContinuousSparsemax
 from .continuous_softmax import ContinuousSoftmax
 from typing import Literal
 
+class GaussianBasisFunctionsModule(nn.Module, GaussianBasisFunctions):
+    def __init__(self, mu, sigma) -> None:
+        super(GaussianBasisFunctionsModule, self).__init__()
 
-def add_gaussian_basis_functions(nb_basis: int, sigmas) -> torch.Tensor:
-    mu, sigma = torch.meshgrid(torch.linspace(0, 1, nb_basis // len(sigmas)), torch.Tensor(sigmas))
-    mu = mu.flatten()
-    sigma = sigma.flatten()
-    assert mu.size(0) == nb_basis
-    return mu, sigma
-
-
-def compute_G(attn_num_basis: int, ridge_penalty: float, l: int, psi: GaussianBasisFunctions, positions: torch.Tensor, padding=True) -> torch.Tensor:
-    F = torch.zeros(attn_num_basis, positions.size(0))
-
-    F[:, :] = psi.evaluate(positions.unsqueeze(1)).t()
-
-    I = torch.eye(attn_num_basis)
-    G = F.t().matmul((F.matmul(F.t()) + ridge_penalty * I).inverse())
-
-    if padding:
-        if l % 2:
-            G = G[((l-1)//2):(-(l-1)//2), :]
-        else:
-            G = G[(l//2):-(l//2), :]
-
-    return G
-
+        self.register_buffer("mu", mu.unsqueeze(0))
+        self.register_buffer("sigma", sigma.unsqueeze(0))
 
 class LongTermAttention(nn.Module):
     def __init__(self, head_dim: int, memory_length: int, attn_func: Literal["softmax", "sparsemax"], 
@@ -124,8 +105,8 @@ class LongTermAttention(nn.Module):
             attn_num_basis += (len(sigmas) - attn_num_basis % len(sigmas))
 
         # get positions for memory vectors
-        basis_mu, basis_sigma = add_gaussian_basis_functions(attn_num_basis, sigmas)
-        self.psi = GaussianBasisFunctions(mu=basis_mu, sigma=basis_sigma)
+        basis_mu, basis_sigma = LongTermAttention.add_gaussian_basis_functions(attn_num_basis, sigmas)
+        self.psi = GaussianBasisFunctionsModule(mu=basis_mu, sigma=basis_sigma)
         self.register_buffer("basis_mu", basis_mu)
         self.register_buffer("basis_sigma", basis_sigma)
 
@@ -141,7 +122,8 @@ class LongTermAttention(nn.Module):
             positions = torch.linspace(shift, 1-shift, memory_length)
 
         # compute basis functions
-        self.Gs = compute_G(self.attn_num_basis, self.ridge_penalty, memory_length, self.psi, positions, padding=padding) # [L,N]
+        Gs = LongTermAttention.compute_G(self.attn_num_basis, self.ridge_penalty, memory_length, self.psi, positions, padding=padding) # [L,N]
+        self.register_buffer("Gs", Gs)
         self.positions = positions[int(memory_length/2):-int(memory_length/2)]
 
         # compute samples for memory update
@@ -171,12 +153,38 @@ class LongTermAttention(nn.Module):
                     self.samples = torch.cat([self.samples,self.psi.evaluate(t/self.tau)], dim=0)
 
             # compute G for the infinite case
-            self.G_inf = compute_G(self.attn_num_basis, self.ridge_penalty, self.nb_samples+memory_length, self.psi, positions_inf, padding=padding) #[L+nb_samples,N]
+            G_inf = LongTermAttention.compute_G(self.attn_num_basis, self.ridge_penalty, self.nb_samples+memory_length, self.psi, positions_inf, padding=padding) #[L+nb_samples,N]
+            self.register_buffer("G_inf", G_inf)
 
             if self.use_sticky_memories:
                 self.bins = torch.linspace(0,1,129) #self.positions
                 self.nb_bins_cat=1
                 self.bins_cat = dist.Categorical(torch.ones(self.nb_bins_cat))
+
+    @staticmethod
+    def add_gaussian_basis_functions(nb_basis: int, sigmas) -> torch.Tensor:
+        mu, sigma = torch.meshgrid(torch.linspace(0, 1, nb_basis // len(sigmas)), torch.Tensor(sigmas))
+        mu = mu.flatten()
+        sigma = sigma.flatten()
+        assert mu.size(0) == nb_basis
+        return mu, sigma
+
+    @staticmethod
+    def compute_G(attn_num_basis: int, ridge_penalty: float, l: int, psi: GaussianBasisFunctionsModule, positions: torch.Tensor, padding=True) -> torch.Tensor:
+        F = torch.zeros(attn_num_basis, positions.size(0))
+
+        F[:, :] = psi.evaluate(positions.unsqueeze(1)).t()
+
+        I = torch.eye(attn_num_basis)
+        G = F.t().matmul((F.matmul(F.t()) + ridge_penalty * I).inverse())
+
+        if padding:
+            if l % 2:
+                G = G[((l-1)//2):(-(l-1)//2), :]
+            else:
+                G = G[(l//2):-(l//2), :]
+
+        return G
 
     def score(self, query, keys):
         query = query/ (self.head_dim ** 0.5) # divide by sqrt(head_dim) [B,h,q,d]
