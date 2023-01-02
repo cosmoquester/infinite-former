@@ -157,7 +157,7 @@ class LongTermAttention(nn.Module):
             self.register_buffer("G_inf", G_inf)
 
             if self.use_sticky_memories:
-                self.bins = torch.linspace(0,1,129) #self.positions
+                self.register_buffer("bins", torch.linspace(0,1,129)) #self.positions
                 self.nb_bins_cat=1
                 self.bins_cat = dist.Categorical(torch.ones(self.nb_bins_cat))
 
@@ -220,13 +220,13 @@ class LongTermAttention(nn.Module):
 
                 b = p.sample((self.nb_samples,))
                 
-                t = self.bins_cat.sample((self.nb_samples,self.attn_past[0].size(0)))
+                t = self.bins_cat.sample((self.nb_samples,self.attn_past[0].size(0))).to(x.device)
 
                 ts = (t*(self.bins[b+1]-self.bins[b])/self.nb_bins_cat +self.bins[b]).transpose(1,0)
 
                 ts = torch.sort(ts,-1)[0]
             
-                samples=torch.zeros(x.size(0),self.nb_samples,self.attn_num_basis)
+                samples=torch.zeros(x.size(0),self.nb_samples,self.attn_num_basis, device=x.device)
                 for i in range(len(ts)):
                     samples[i] = self.psi.batch_evaluate(ts[i])
 
