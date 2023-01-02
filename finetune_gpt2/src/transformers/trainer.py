@@ -441,6 +441,8 @@ class Trainer:
         self.kl_regularizer=args.kl_regularizer
         self.kl_m=args.kl_m
         self.compressive=args.compressive
+        self.mems = None
+        self.B_pasts = None
 
     def add_callback(self, callback):
         """
@@ -1531,12 +1533,10 @@ class Trainer:
             with autocast():
                 loss = self.compute_loss(model, inputs)
         else:
-            if self.kl_regularizer:
-                loss, kl_reg = self.compute_loss(model, inputs)
-            elif self.compressive:
+            if self.compressive:
                 loss, c_loss = self.compute_loss(model, inputs)
             else:
-                loss = self.compute_loss(model, inputs)
+                loss, new_mems, new_B_pasts, kl_reg = self.compute_loss(model, inputs)
 
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
@@ -1583,12 +1583,12 @@ class Trainer:
             labels = inputs.pop("labels")
         else:
             labels = None
-        if self.kl_regularizer:
-            outputs, kl_reg = model(**inputs)
-        elif self.compressive:
+        if self.compressive:
             outputs, c_loss = model(**inputs)
-        else:    
-            outputs = model(**inputs)
+        else:
+            outputs, (new_mems, new_B_pasts, kl_reg) = model(**inputs, mems=self.mems, B_pasts=self.B_pasts)
+            self.mems = new_mems
+            self.B_pasts = new_B_pasts
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.
         if self.args.past_index >= 0:
@@ -1600,11 +1600,9 @@ class Trainer:
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
 
-        if self.kl_regularizer:
-            return (loss, outputs, kl_reg) if return_outputs else (loss, kl_reg)
-        elif self.compressive:
+        if self.compressive:
             return (loss, outputs, c_loss) if return_outputs else (loss, c_loss)
-        return (loss, outputs) if return_outputs else loss
+        return (loss, outputs, new_mems, new_B_pasts, kl_reg) if return_outputs else (loss, new_mems, new_B_pasts, kl_reg)
 
     def is_local_process_zero(self) -> bool:
         """
@@ -2037,12 +2035,10 @@ class Trainer:
 
         with torch.no_grad():
             if has_labels:
-                if self.kl_regularizer:
-                    loss, outputs, kl_reg = self.compute_loss(model, inputs, return_outputs=True)
-                elif self.compressive:
+                if self.compressive:
                     loss, outputs, c_loss = self.compute_loss(model, inputs, return_outputs=True)
                 else:
-                    loss, outputs = self.compute_loss(model, inputs, return_outputs=True)
+                    loss, outputs, new_mems, new_B_pasts, kl_reg = self.compute_loss(model, inputs, return_outputs=True)
 
                 loss = loss.mean().detach()
                 if isinstance(outputs, dict):
