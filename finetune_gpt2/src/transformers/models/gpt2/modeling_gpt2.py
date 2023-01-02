@@ -278,13 +278,16 @@ class Attention(nn.Module):
         a = self.merge_heads(a)
         a = self.c_proj(a)
 
-        if self.use_long_term_attention and mem is not None:
-            a_long_term, new_B_past, kl_reg = self.long_term_attention(mem, query, B_past)
-            a+=a_long_term
+        if self.use_long_term_attention:
+            if mem is not None:
+                a_long_term, new_B_past, kl_reg = self.long_term_attention(mem, query, B_past)
+                a+=a_long_term
+            else:
+                new_B_past, kl_reg = None, None
 
         a = self.resid_dropout(a)
 
-        if self.use_long_term_attention and mem is not None and self.kl_regularizer:
+        if self.use_long_term_attention:
             return (a, present) + attn_outputs[1:] + (new_B_past, kl_reg)  # a, present, (attentions)
 
         return (a, present) + attn_outputs[1:]  # a, present, (attentions)
@@ -349,6 +352,7 @@ class Block(nn.Module):
                 B_past=B_past,
             )
             new_mem = hidden_states.detach()
+            attn_outputs = tuple(attn_outputs)
         else:
             attn_outputs = self.attn(
                 self.ln_1(hidden_states),
@@ -838,8 +842,8 @@ class GPT2Model(GPT2PreTrainedModel):
                         encoder_attention_mask=encoder_attention_mask,
                         use_cache=use_cache,
                         output_attentions=output_attentions,
-                        mem=mems[i],
-                        new_B_past=B_pasts[i],
+                        mem=mems[i] if mems else None,
+                        B_past=B_pasts[i] if B_pasts else None,
                     )
                     new_mems.append(new_mem)
                     new_B_pasts.append(new_B_past)
@@ -1006,6 +1010,8 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
+        mems=None,
+        B_pasts=None,
     ):
         r"""
         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
@@ -1030,6 +1036,8 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
                 return_dict=return_dict,
+                mems=mems,
+                B_pasts=B_pasts,
             )
         
         else:
@@ -1070,7 +1078,7 @@ class GPT2LMHeadModel(GPT2PreTrainedModel):
             output = (lm_logits,) + transformer_outputs[1:]
             return ((loss,) + output) if loss is not None else output
 
-        if self.long_term_attention and self.kl_regularizer:
+        if self.long_term_attention:
             return CausalLMOutputWithCrossAttentions(
                 loss=loss,
                 logits=lm_logits,
