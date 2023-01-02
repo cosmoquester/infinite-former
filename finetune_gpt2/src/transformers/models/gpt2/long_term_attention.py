@@ -141,7 +141,7 @@ class LongTermAttention(nn.Module):
             positions = torch.linspace(shift, 1-shift, memory_length)
 
         # compute basis functions
-        self.Gs = compute_G(self.attn_num_basis, self.ridge_penalty, memory_length, self.psi[0], positions, padding=padding) # [L,N]
+        self.Gs = compute_G(self.attn_num_basis, self.ridge_penalty, memory_length, self.psi, positions, padding=padding) # [L,N]
         self.positions = positions[int(memory_length/2):-int(memory_length/2)]
 
         # compute samples for memory update
@@ -166,12 +166,12 @@ class LongTermAttention(nn.Module):
             self.samples=None
             for t in tm_tau:
                 if self.samples is None:
-                    self.samples = self.psi[0].evaluate(t/self.tau)
+                    self.samples = self.psi.evaluate(t/self.tau)
                 else:
-                    self.samples = torch.cat([self.samples,self.psi[0].evaluate(t/self.tau)], dim=0)
+                    self.samples = torch.cat([self.samples,self.psi.evaluate(t/self.tau)], dim=0)
 
             # compute G for the infinite case
-            self.G_inf = compute_G(self.attn_num_basis, self.ridge_penalty, self.nb_samples+memory_length, self.psi[0], positions_inf, padding=padding) #[L+nb_samples,N]
+            self.G_inf = compute_G(self.attn_num_basis, self.ridge_penalty, self.nb_samples+memory_length, self.psi, positions_inf, padding=padding) #[L+nb_samples,N]
 
             if self.use_sticky_memories:
                 self.bins = torch.linspace(0,1,129) #self.positions
@@ -220,7 +220,7 @@ class LongTermAttention(nn.Module):
             
                 samples=torch.zeros(x.size(0),self.nb_samples,self.attn_num_basis)
                 for i in range(len(ts)):
-                    samples[i] = self.psi[0].batch_evaluate(ts[i])
+                    samples[i] = self.psi.batch_evaluate(ts[i])
 
                 xm_tau = B_past.transpose(-1,-2).matmul(samples.transpose(-1,-2)) # [B,e,nb_samples]
             
@@ -303,7 +303,7 @@ class LongTermAttention(nn.Module):
         theta[:, 1] = -1. / (2. * sigma_sq)
 
         # get basis functions
-        self.transform.psi = self.psi
+        self.transform.psi = [self.psi]
 
         #compute basis functions expectation
         r = self.transform(theta) # [B*h*q,N] 
