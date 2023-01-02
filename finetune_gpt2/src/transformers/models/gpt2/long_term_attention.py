@@ -13,12 +13,12 @@ from .continuous_softmax import ContinuousSoftmax
 from typing import Literal
 
 
-def add_gaussian_basis_functions(nb_basis: int, sigmas, device) -> torch.Tensor:
+def add_gaussian_basis_functions(nb_basis: int, sigmas) -> torch.Tensor:
     mu, sigma = torch.meshgrid(torch.linspace(0, 1, nb_basis // len(sigmas)), torch.Tensor(sigmas))
-    mu = mu.flatten().to(device)
-    sigma = sigma.flatten().to(device)
+    mu = mu.flatten()
+    sigma = sigma.flatten()
     assert mu.size(0) == nb_basis
-    return mu, sigma, GaussianBasisFunctions
+    return mu, sigma
 
 
 def compute_G(attn_num_basis: int, ridge_penalty: float, l: int, psi: GaussianBasisFunctions, positions: torch.Tensor, padding=True) -> torch.Tensor:
@@ -138,8 +138,8 @@ class LongTermAttention(nn.Module):
             lengths.append(memory_length)
         for l in lengths:
             # get positions for memory vectors
-            self.basis_mu, self.basis_sigma, gaussian_bassis_fn = add_gaussian_basis_functions(attn_num_basis, sigmas, device=self.device)
-            self.psi[l].append(gaussian_bassis_fn)
+            self.basis_mu, self.basis_sigma = add_gaussian_basis_functions(attn_num_basis, sigmas)
+            self.psi[l].append(GaussianBasisFunctions(mu=self.basis_mu, sigma=self.basis_sigma))
 
             if padding:
                 if l % 2:
