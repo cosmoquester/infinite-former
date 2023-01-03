@@ -165,7 +165,6 @@ class Attention(nn.Module):
                                             attn_drop=config.attn_drop,
                                             n_heads=self.n_head,
                                             use_affines=config.affines,
-                                            use_mask=config.mask,
                                             mask_type=config.mask_type,
                                             mask_dropout=config.mask_dropout,
                                             use_kl_regularizer=self.kl_regularizer,
