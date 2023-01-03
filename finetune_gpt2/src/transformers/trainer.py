@@ -443,6 +443,8 @@ class Trainer:
         self.compressive=args.compressive
         self.mems = None
         self.B_pasts = None
+        self.attn_past_mus = None
+        self.attn_past_sigma_sqs = None
 
     def add_callback(self, callback):
         """
@@ -1536,7 +1538,7 @@ class Trainer:
             if self.compressive:
                 loss, c_loss = self.compute_loss(model, inputs)
             else:
-                loss, new_mems, new_B_pasts, kl_reg = self.compute_loss(model, inputs)
+                loss, new_mems, new_B_pasts, new_attn_past_mus, new_attn_past_sigma_sqs, kl_reg = self.compute_loss(model, inputs)
 
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
@@ -1586,9 +1588,11 @@ class Trainer:
         if self.compressive:
             outputs, c_loss = model(**inputs)
         else:
-            outputs, (new_mems, new_B_pasts, kl_reg) = model(**inputs, mems=self.mems, B_pasts=self.B_pasts)
+            outputs, (new_mems, new_B_pasts, new_attn_past_mus, new_attn_past_sigma_sqs, kl_reg) = model(**inputs, mems=self.mems, B_pasts=self.B_pasts, attn_past_mus=self.attn_past_mus, attn_past_sigma_sqs=self.attn_past_sigma_sqs)
             self.mems = new_mems
             self.B_pasts = new_B_pasts
+            self.attn_past_mus = new_attn_past_mus
+            self.attn_past_sigma_sqs = new_attn_past_sigma_sqs
         # Save past state if it exists
         # TODO: this needs to be fixed and made cleaner later.
         if self.args.past_index >= 0:
@@ -1602,7 +1606,7 @@ class Trainer:
 
         if self.compressive:
             return (loss, outputs, c_loss) if return_outputs else (loss, c_loss)
-        return (loss, outputs, new_mems, new_B_pasts, kl_reg) if return_outputs else (loss, new_mems, new_B_pasts, kl_reg)
+        return (loss, outputs, new_mems, new_B_pasts, new_attn_past_mus, new_attn_past_sigma_sqs, kl_reg) if return_outputs else (loss, new_mems, new_B_pasts, new_attn_past_mus, new_attn_past_sigma_sqs, kl_reg)
 
     def is_local_process_zero(self) -> bool:
         """
@@ -2038,7 +2042,7 @@ class Trainer:
                 if self.compressive:
                     loss, outputs, c_loss = self.compute_loss(model, inputs, return_outputs=True)
                 else:
-                    loss, outputs, new_mems, new_B_pasts, kl_reg = self.compute_loss(model, inputs, return_outputs=True)
+                    loss, outputs, *_ = self.compute_loss(model, inputs, return_outputs=True)
 
                 loss = loss.mean().detach()
                 if isinstance(outputs, dict):

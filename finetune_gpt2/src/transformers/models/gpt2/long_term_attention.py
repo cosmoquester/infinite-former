@@ -158,8 +158,6 @@ class LongTermAttention(nn.Module):
                 self.register_buffer("bins", torch.linspace(0,1,129)) #self.positions
                 self.nb_bins_cat=1
                 self.bins_cat = dist.Categorical(torch.ones(self.nb_bins_cat))
-                self.attn_past_mu=None
-                self.attn_past_sigma_sq=None
 
     @staticmethod
     def get_gaussian_basis_functions(nb_basis: int, sigmas) -> torch.Tensor:
@@ -201,25 +199,25 @@ class LongTermAttention(nn.Module):
         
         return B
 
-    def update_inf(self, x, B_past):
+    def update_inf(self, x, B_past, attn_past_mu, attn_past_sigma_sq):
         if B_past is not None:       
             if self.use_sticky_memories:
 
-                n = dist.Normal(self.attn_past_mu,self.attn_past_sigma_sq)
+                n = dist.Normal(attn_past_mu,attn_past_sigma_sq)
                 
                 bins = self.bins.clone()
                 bins[0]=-.000001
                 bins[-1]=1.000001
 
-                p = (n.cdf(bins[1:].repeat(self.attn_past_mu.size(1),x.size(0),1).permute(2,1,0))
-                    -n.cdf(bins[:-1].repeat(self.attn_past_mu.size(1),x.size(0),1).permute(2,1,0))).sum(-1).transpose(1,0)
+                p = (n.cdf(bins[1:].repeat(attn_past_mu.size(1),x.size(0),1).permute(2,1,0))
+                    -n.cdf(bins[:-1].repeat(attn_past_mu.size(1),x.size(0),1).permute(2,1,0))).sum(-1).transpose(1,0)
                 
                 p = (p/p.sum(-1).repeat(p.size(-1),1).transpose(1,0))
                 p = dist.Categorical(p)
 
                 b = p.sample((self.nb_samples,))
                 
-                t = self.bins_cat.sample((self.nb_samples,self.attn_past_mu.size(0))).to(x.device)
+                t = self.bins_cat.sample((self.nb_samples,attn_past_mu.size(0))).to(x.device)
 
                 ts = (t*(self.bins[b+1]-self.bins[b])/self.nb_bins_cat +self.bins[b]).transpose(1,0)
 
@@ -242,7 +240,7 @@ class LongTermAttention(nn.Module):
         return B
 
 
-    def forward(self, k, query, B_past=None):
+    def forward(self, k, query, B_past=None, attn_past_mu=None, attn_past_sigma_sq=None):
         """
         Args:
             k: memory [BatchSize, SeqLength, HiddenDim]
@@ -261,7 +259,7 @@ class LongTermAttention(nn.Module):
 
         # perform memory update
         if self.use_infinite_memory:
-            B = self.update_inf(k, B_past)
+            B = self.update_inf(k, B_past, attn_past_mu, attn_past_sigma_sq)
             new_B_past = B.detach()
         else: # compute input continuous approximation
             B = self.value_function(k) # [B,N,e]
@@ -284,8 +282,8 @@ class LongTermAttention(nn.Module):
             sigma_sq = torch.clamp(sigma_sq, min=1e-4).view(-1)
 
             if self.use_sticky_memories:
-                self.attn_past_mu = mu.view(batch_size,-1)
-                self.attn_past_sigma_sq = sigma_sq.view(batch_size,-1)**(1/2)
+                new_attn_past_mu = mu.view(batch_size,-1)
+                new_attn_past_sigma_sq = sigma_sq.view(batch_size,-1)**(1/2)
         else:
             scores = torch.softmax(scores,dim=-1)
             mu = torch.matmul(scores, self.basis_mu)
@@ -324,7 +322,7 @@ class LongTermAttention(nn.Module):
 
         context = self.attn_out(context)
 
-        return context, new_B_past, kl_reg
+        return context, new_B_past, new_attn_past_mu, new_attn_past_sigma_sq, kl_reg
 
     def __repr__(self):
         return "ContinuousAttention"
