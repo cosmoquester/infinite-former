@@ -99,18 +99,8 @@ class LongTermAttention(nn.Module):
         else:
             raise ValueError(f"'attn_func' cannot be `{attn_func}`")
 
-        if padding:
-            if memory_length % 2:
-                shift = 1 / float(memory_length)
-                positions = torch.linspace(-.5+shift, 1.5-shift, 2*memory_length-1)
-            else:
-                shift = 1 / float(2*memory_length)
-                positions = torch.linspace(-.5+shift, 1.5-shift, 2*memory_length)
-        else:
-            shift = 1 / float(2*memory_length)
-            positions = torch.linspace(shift, 1-shift, memory_length)
-
         # compute basis functions
+        positions = self.get_positions(memory_length, padding)
         Gs = self.compute_G(memory_length, self.psi, positions, padding=padding) # [L,N]
         self.register_buffer("Gs", Gs)
         self.register_buffer("positions", positions[int(memory_length/2):-int(memory_length/2)])
@@ -164,6 +154,19 @@ class LongTermAttention(nn.Module):
         assert mu.size(0) == nb_basis
         return mu, sigma
 
+    def get_positions(self, memory_length: int, padding: bool):
+        if padding:
+            if memory_length % 2:
+                shift = 1 / float(memory_length)
+                positions = torch.linspace(-.5+shift, 1.5-shift, 2*memory_length-1)
+            else:
+                shift = 1 / float(2*memory_length)
+                positions = torch.linspace(-.5+shift, 1.5-shift, 2*memory_length)
+        else:
+            shift = 1 / float(2*memory_length)
+            positions = torch.linspace(shift, 1-shift, memory_length)
+        return positions
+
     def compute_G(self, l: int, psi: GaussianBasisFunctionsModule, positions: torch.Tensor, ridge_penalty: float = 0.5, padding=True) -> torch.Tensor:
         F = torch.zeros(self.attn_num_basis, positions.size(0))
 
@@ -197,43 +200,43 @@ class LongTermAttention(nn.Module):
         return B
 
     def update_inf(self, x, B_past, attn_past_mu, attn_past_sigma_sq):
-        if B_past is not None:       
-            if self.use_sticky_memories:
-
-                n = dist.Normal(attn_past_mu,attn_past_sigma_sq)
-                
-                bins = self.bins.clone()
-                bins[0]=-.000001
-                bins[-1]=1.000001
-
-                p = (n.cdf(bins[1:].repeat(attn_past_mu.size(1),x.size(0),1).permute(2,1,0))
-                    -n.cdf(bins[:-1].repeat(attn_past_mu.size(1),x.size(0),1).permute(2,1,0))).sum(-1).transpose(1,0)
-                
-                p = (p/p.sum(-1).repeat(p.size(-1),1).transpose(1,0))
-                p = dist.Categorical(p)
-
-                b = p.sample((self.nb_samples,))
-                
-                t = self.bins_cat.sample((self.nb_samples,attn_past_mu.size(0))).to(x.device)
-
-                ts = (t*(self.bins[b+1]-self.bins[b])/self.nb_bins_cat +self.bins[b]).transpose(1,0)
-
-                ts = torch.sort(ts,-1)[0]
-            
-                samples=torch.zeros(x.size(0),self.nb_samples,self.attn_num_basis, device=x.device)
-                for i in range(len(ts)):
-                    samples[i] = self.psi.batch_evaluate(ts[i])
-
-                xm_tau = B_past.transpose(-1,-2).matmul(samples.transpose(-1,-2)) # [B,e,nb_samples]
-            
-            else:
-                xm_tau = B_past.transpose(-1,-2).matmul(self.samples.transpose(-1,-2)) # [B,e,nb_samples]
-            
-            x = torch.cat([xm_tau,x], dim=2) # [B,e,nb_samples+L]
-            B = self.value_function(x, inf=True) # [B,N,e]
-        else:
+        if B_past is None:       
             B = self.value_function(x)
+            return B
 
+        if self.use_sticky_memories:
+
+            n = dist.Normal(attn_past_mu,attn_past_sigma_sq)
+            
+            bins = self.bins.clone()
+            bins[0]=-.000001
+            bins[-1]=1.000001
+
+            p = (n.cdf(bins[1:].repeat(attn_past_mu.size(1),x.size(0),1).permute(2,1,0))
+                -n.cdf(bins[:-1].repeat(attn_past_mu.size(1),x.size(0),1).permute(2,1,0))).sum(-1).transpose(1,0)
+            
+            p = (p/p.sum(-1).repeat(p.size(-1),1).transpose(1,0))
+            p = dist.Categorical(p)
+
+            b = p.sample((self.nb_samples,))
+            
+            t = self.bins_cat.sample((self.nb_samples,attn_past_mu.size(0))).to(x.device)
+
+            ts = (t*(self.bins[b+1]-self.bins[b])/self.nb_bins_cat +self.bins[b]).transpose(1,0)
+
+            ts = torch.sort(ts,-1)[0]
+        
+            samples=torch.zeros(x.size(0),self.nb_samples,self.attn_num_basis, device=x.device)
+            for i in range(len(ts)):
+                samples[i] = self.psi.batch_evaluate(ts[i])
+
+            xm_tau = B_past.transpose(-1,-2).matmul(samples.transpose(-1,-2)) # [B,e,nb_samples]
+        
+        else:
+            xm_tau = B_past.transpose(-1,-2).matmul(self.samples.transpose(-1,-2)) # [B,e,nb_samples]
+        
+        x = torch.cat([xm_tau,x], dim=2) # [B,e,nb_samples+L]
+        B = self.value_function(x, inf=True) # [B,N,e]
         return B
 
 
