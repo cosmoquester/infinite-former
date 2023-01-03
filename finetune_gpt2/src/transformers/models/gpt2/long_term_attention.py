@@ -60,8 +60,6 @@ class LongTermAttention(nn.Module):
         self.mask_type=mask_type
         self.mask_dropout_value=mask_dropout
         self.use_sticky_memories=use_sticky_memories
-
-        self.attn_past=None # Used with sticky memory
         self.use_infinite_memory = use_infinite_memory
  
         self.proj_query = nn.Linear(n_heads * head_dim, n_heads * head_dim, bias=False)
@@ -160,6 +158,8 @@ class LongTermAttention(nn.Module):
                 self.register_buffer("bins", torch.linspace(0,1,129)) #self.positions
                 self.nb_bins_cat=1
                 self.bins_cat = dist.Categorical(torch.ones(self.nb_bins_cat))
+                self.attn_past_mu=None
+                self.attn_past_sigma_sq=None
 
     @staticmethod
     def get_gaussian_basis_functions(nb_basis: int, sigmas) -> torch.Tensor:
@@ -205,21 +205,21 @@ class LongTermAttention(nn.Module):
         if B_past is not None:       
             if self.use_sticky_memories:
 
-                n = dist.Normal(self.attn_past[0],self.attn_past[1])
+                n = dist.Normal(self.attn_past_mu,self.attn_past_sigma_sq)
                 
                 bins = self.bins.clone()
                 bins[0]=-.000001
                 bins[-1]=1.000001
 
-                p = (n.cdf(bins[1:].repeat(self.attn_past[0].size(1),x.size(0),1).permute(2,1,0))
-                    -n.cdf(bins[:-1].repeat(self.attn_past[0].size(1),x.size(0),1).permute(2,1,0))).sum(-1).transpose(1,0)
+                p = (n.cdf(bins[1:].repeat(self.attn_past_mu.size(1),x.size(0),1).permute(2,1,0))
+                    -n.cdf(bins[:-1].repeat(self.attn_past_mu.size(1),x.size(0),1).permute(2,1,0))).sum(-1).transpose(1,0)
                 
                 p = (p/p.sum(-1).repeat(p.size(-1),1).transpose(1,0))
                 p = dist.Categorical(p)
 
                 b = p.sample((self.nb_samples,))
                 
-                t = self.bins_cat.sample((self.nb_samples,self.attn_past[0].size(0))).to(x.device)
+                t = self.bins_cat.sample((self.nb_samples,self.attn_past_mu.size(0))).to(x.device)
 
                 ts = (t*(self.bins[b+1]-self.bins[b])/self.nb_bins_cat +self.bins[b]).transpose(1,0)
 
@@ -284,7 +284,8 @@ class LongTermAttention(nn.Module):
             sigma_sq = torch.clamp(sigma_sq, min=1e-4).view(-1)
 
             if self.use_sticky_memories:
-                self.attn_past=[mu.view(batch_size,-1),sigma_sq.view(batch_size,-1)**(1/2)]
+                self.attn_past_mu = mu.view(batch_size,-1)
+                self.attn_past_sigma_sq = sigma_sq.view(batch_size,-1)**(1/2)
         else:
             scores = torch.softmax(scores,dim=-1)
             mu = torch.matmul(scores, self.basis_mu)
