@@ -20,11 +20,12 @@ To fine-tune the GPT-2 with the long-term memory, you first need to install the 
 pip install --editable ./finetune_gpt2 
 ```
 Then, to fine-tune the model run the command:
-```
-python ./finetune_gpt2/examples/language-modeling/run_clm.py 	\
+
+```sh
+$ python ./finetune_gpt2/examples/language-modeling/run_clm.py 	\
 	--model_name_or_path=gpt2 \
 	--model_type=gpt2 \
-	--config_name=infinite_memory_transformer_sticky_mem \
+	--config_name=./finetune_gpt2/configs/infinite_memory_transformer_sticky_mem.json \
 	--per_device_eval_batch_size=1 \
 	--per_device_train_batch_size=1 \
 	--train_file=</path/to/train/data/file> \
@@ -36,12 +37,14 @@ python ./finetune_gpt2/examples/language-modeling/run_clm.py 	\
 	--kl_regularizer \
 	--kl_m=.000001
 ```
+
 To evaluate the model do:
-```
-python ./finetune_gpt2/examples/language-modeling/run_clm.py \
+
+```sh
+$ python ./finetune_gpt2/examples/language-modeling/run_clm.py \
 	--model_name_or_path=</path/to/output/dir>
 	--model_type=gpt2 \
-	--config_name=infinite_memory_transformer_sticky_mem \ 
+	--config_name=./finetune_gpt2/configs/infinite_memory_transformer_sticky_mem.json \ 
 	--per_device_eval_batch_size=1 \
 	--validation_file=</path/to/test/data/file> \
 	--do_eval \
