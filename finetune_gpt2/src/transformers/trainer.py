@@ -269,7 +269,7 @@ class Trainer:
 
 
         self.best_perplexity=1000
-        self.log_file = open(args.output_dir.replace('checkpoints','log.txt'),'a')
+        self.log_file = open(os.path.join(args.output_dir, 'log.txt'),'a')
 
         # force device and distributed setup init explicitly
         args._setup_devices
